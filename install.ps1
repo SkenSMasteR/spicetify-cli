@@ -184,8 +184,8 @@ function Get-Spicetify {
   }
 
   if ($v) {
-    if ($v -match '^\d+\.\d+\.\d+$') {
-      $targetVersion = $v
+    if ($v -match '^v?(\d+\.\d+\.\d+)$') {
+      $targetVersion = $Matches[1]
     }
     else {
       throw "Invalid spicetify version: $v (expected x.y.z)"
@@ -284,12 +284,13 @@ function Add-SpicetifyToPath {
 
   [Environment]::SetEnvironmentVariable('PATH', $userPath, $user)
 
-  $machinePath = [Environment]::GetEnvironmentVariable('PATH', [EnvironmentVariableTarget]::Machine)
-  if ([string]::IsNullOrWhiteSpace($machinePath)) {
-    $env:PATH = $userPath
+  $processPath = $env:PATH
+  $processPath = $processPath -replace "$([regex]::Escape($spicetifyOldFolderPath))\\*;*", ''
+  if ($processPath -notlike "*$spicetifyFolderPath*") {
+    $env:PATH = "$processPath;$spicetifyFolderPath"
   }
   else {
-    $env:PATH = "$userPath;$machinePath"
+    $env:PATH = $processPath
   }
 
   Write-Log -message 'PATH updated.' -color 'Green'
