@@ -167,6 +167,37 @@ function Test-PowerShellVersion {
   $PSVersionTable.PSVersion -ge $PSMinVersion
 }
 
+function Prompt-YesNo {
+  param (
+    [string]$Message,
+    [string]$YesHelp,
+    [string]$NoHelp,
+    [int]$DefaultChoice = 0
+  )
+
+  if ($Host.UI -and $Host.UI.RawUI) {
+    try {
+      $Host.UI.RawUI.Flushinputbuffer()
+      $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
+        (New-Object System.Management.Automation.Host.ChoiceDescription '&Yes', $YesHelp),
+        (New-Object System.Management.Automation.Host.ChoiceDescription '&No', $NoHelp)
+      )
+      return $Host.UI.PromptForChoice('', $Message, $choices, $DefaultChoice)
+    }
+    catch {
+      # Fall through to Read-Host mode when RawUI choice prompt isn't supported.
+    }
+  }
+
+  $suffix = if ($DefaultChoice -eq 0) { ' [Y/n]' } else { ' [y/N]' }
+  $answer = Read-Host -Prompt ($Message + $suffix)
+  if ([string]::IsNullOrWhiteSpace($answer)) {
+    return $DefaultChoice
+  }
+  if ($answer.Trim().ToLower() -eq 'y') { return 0 }
+  return 1
+}
+
 function Move-OldSpicetifyFolder {
   if (Test-Path -Path $spicetifyOldFolderPath) {
     Write-Log -message 'Moving old spicetify folder...'
@@ -180,10 +211,11 @@ function Move-OldSpicetifyFolder {
 }
 
 function Get-Spicetify {
-  if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+  $effectiveArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+  if ($effectiveArch -eq 'AMD64') {
     $architecture = 'x64'
   }
-  elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+  elseif ($effectiveArch -eq 'ARM64') {
     $architecture = 'arm64'
   }
   else {
@@ -366,10 +398,7 @@ function Install-Marketplace {
         }
       }
       else {
-        & $tempScript
-        if ($LASTEXITCODE -ne 0) {
-          throw "Marketplace installer exited with code $LASTEXITCODE"
-        }
+        throw 'Unable to locate powershell.exe to run Marketplace installer with ExecutionPolicy Bypass.'
       }
     }
   }
@@ -416,12 +445,11 @@ try {
   if (-not (Test-Admin)) {
     Write-Log -message 'Warning: running as Administrator may cause issues.' -color 'Yellow'
     Move-CursorToBottom
-    $Host.UI.RawUI.Flushinputbuffer()
-    $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
-      (New-Object System.Management.Automation.Host.ChoiceDescription '&Yes', 'Abort installation.'),
-      (New-Object System.Management.Automation.Host.ChoiceDescription '&No', 'Continue installation.')
-    )
-    $choice = $Host.UI.PromptForChoice('', 'Do you want to abort the installation process?', $choices, 0)
+    $choice = Prompt-YesNo `
+      -Message 'Do you want to abort the installation process?' `
+      -YesHelp 'Abort installation.' `
+      -NoHelp 'Continue installation.' `
+      -DefaultChoice 0
     if ($choice -eq 0) {
       throw 'spicetify installation aborted by user.'
     }
@@ -434,12 +462,11 @@ try {
   Install-Spicetify
 
   Move-CursorToBottom
-  $Host.UI.RawUI.Flushinputbuffer()
-  $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
-    (New-Object System.Management.Automation.Host.ChoiceDescription '&Yes', 'Install Spicetify Marketplace.'),
-    (New-Object System.Management.Automation.Host.ChoiceDescription '&No', 'Do not install Spicetify Marketplace.')
-  )
-  $choice = $Host.UI.PromptForChoice('', 'Do you also want to install Spicetify Marketplace?', $choices, 0)
+  $choice = Prompt-YesNo `
+    -Message 'Do you also want to install Spicetify Marketplace?' `
+    -YesHelp 'Install Spicetify Marketplace.' `
+    -NoHelp 'Do not install Spicetify Marketplace.' `
+    -DefaultChoice 0
   if ($choice -eq 0) {
     Enter-StandardOutput
     Install-Marketplace
