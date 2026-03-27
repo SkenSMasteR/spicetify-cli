@@ -127,6 +127,7 @@ function Write-Log {
 
 function Update-Progress {
   param ([int]$percent)
+  if (-not $script:ui) { return }
   $p = [Math]::Max(0, [Math]::Min(100, $percent))
   $barWidth = [Math]::Max(10, [Math]::Min(36, $script:ui.leftWidth - 10))
   $filled = [Math]::Floor(($p / 100) * $barWidth)
@@ -142,7 +143,7 @@ function Set-Status {
     [string]$color = 'Gray'
   )
   if (-not $script:ui) {
-    Write-Host $text -ForegroundColor $color
+    Write-Host ("[{0,3}%] {1}" -f ([Math]::Max(0, [Math]::Min(100, $percent))), $text) -ForegroundColor $color
     return
   }
   $script:lastStatusText = $text
