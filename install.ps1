@@ -127,6 +127,10 @@ function Set-Status {
     [int]$percent,
     [string]$color = 'Gray'
   )
+  if (-not $script:ui) {
+    Write-Host $text -ForegroundColor $color
+    return
+  }
   Write-LeftCentered -text $text -row $script:ui.statusRow -color $color
   Update-Progress -percent $percent
 }
@@ -324,9 +328,12 @@ function Install-Spicetify {
 
 function Install-Marketplace {
   Write-Host 'Starting Marketplace installation...'
+  $marketplaceInstallerCommit = 'e6b09f31e84e039ac4753216cd5aedc748ccd88f'
+  $marketplaceInstallerSha256 = '0962C57F8E36936228429B3A3C5CADABFCC9BBD9C3688C884180AF917DC33F02'
+  $marketplaceInstallerUrl = "https://raw.githubusercontent.com/spicetify/spicetify-marketplace/$marketplaceInstallerCommit/resources/install.ps1"
   $tempScript = Join-Path $env:TEMP 'spicetify-marketplace-install.ps1'
   $downloadParams = @{
-    Uri = 'https://raw.githubusercontent.com/spicetify/spicetify-marketplace/main/resources/install.ps1'
+    Uri = $marketplaceInstallerUrl
     UseBasicParsing = $true
     OutFile = $tempScript
   }
@@ -335,6 +342,10 @@ function Install-Marketplace {
   $ProgressPreference = 'SilentlyContinue'
   try {
     Invoke-WebRequest @downloadParams
+    $actualSha256 = (Get-FileHash -Path $tempScript -Algorithm SHA256).Hash
+    if ($actualSha256 -ne $marketplaceInstallerSha256) {
+      throw "Marketplace installer checksum mismatch. Expected $marketplaceInstallerSha256, got $actualSha256."
+    }
     $powershellExe = Join-Path $PSHOME 'powershell.exe'
     if (-not (Test-Path -Path $powershellExe)) {
       $powershellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
