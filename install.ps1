@@ -37,8 +37,11 @@ function Clear-RectLine {
 
 function Initialize-InstallTui {
   $window = $Host.UI.RawUI.WindowSize
-  $width = [Math]::Max(80, $window.Width)
-  $height = [Math]::Max(24, $window.Height)
+  $width = $window.Width
+  $height = $window.Height
+  if ($width -lt 60 -or $height -lt 20) {
+    throw "Console too small for TUI ($width x $height). Minimum supported size is 60 x 20."
+  }
   $leftWidth = [Math]::Floor($width / 2)
   $rightStart = $leftWidth + 1
 
@@ -111,7 +114,7 @@ function Write-Log {
 function Update-Progress {
   param ([int]$percent)
   $p = [Math]::Max(0, [Math]::Min(100, $percent))
-  $barWidth = [Math]::Max(20, [Math]::Min(36, $script:ui.leftWidth - 10))
+  $barWidth = [Math]::Max(10, [Math]::Min(36, $script:ui.leftWidth - 10))
   $filled = [Math]::Floor(($p / 100) * $barWidth)
   $bar = ('#' * $filled) + ('-' * ($barWidth - $filled))
   $text = "[{0}] {1,3}%" -f $bar, $p
@@ -366,18 +369,30 @@ function Install-Marketplace {
 
 function Fail-AndExit {
   param ([string]$Message)
-  Set-Status -text 'FAILED' -percent 100 -color 'Red'
-  Write-Log -message $Message -color 'Red'
-  Move-CursorToBottom
+  if ($script:ui) {
+    Set-Status -text 'FAILED' -percent 100 -color 'Red'
+    Write-Log -message $Message -color 'Red'
+    Move-CursorToBottom
+  }
+  else {
+    Write-Host "FAILED: $Message" -ForegroundColor Red
+  }
   Pause
   exit 1
 }
 #endregion Core Functions
 
 #region Main
-Initialize-InstallTui
-
 try {
+  try {
+    Initialize-InstallTui
+  }
+  catch {
+    $script:ui = $null
+    Write-Host "TUI disabled: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host 'Falling back to standard output mode.' -ForegroundColor Yellow
+  }
+
   Set-Status -text 'Running checks...' -percent 5 -color 'Yellow'
   if (-not (Test-PowerShellVersion)) {
     throw "PowerShell 5.1+ required. Current: $($PSVersionTable.PSVersion)"
