@@ -356,6 +356,9 @@ function Install-Marketplace {
       }
       else {
         & $tempScript
+        if ($LASTEXITCODE -ne 0) {
+          throw "Marketplace installer exited with code $LASTEXITCODE"
+        }
       }
     }
   }
