@@ -693,6 +693,7 @@ const fnStr = (f) => {
 .spicetify-sc-contentArea:hover .spicetify-sc-onHover .spicetify-sc-chevronBtn.spicetify-sc-chevronVisible { opacity: 1; }
 .spicetify-sc-contentArea:hover .spicetify-sc-onHover .spicetify-sc-chevronStart.spicetify-sc-chevronVisible { translate: 8px; }
 .spicetify-sc-contentArea:hover .spicetify-sc-onHover .spicetify-sc-chevronEnd.spicetify-sc-chevronVisible { translate: -8px; }
+.spicetify-sc-scroller > div[role="presentation"] > button { margin-inline-start: 0px !important; }
 body[data-dragging-uri-type] .spicetify-sc-chevronBtn { pointer-events: none; }`;
 			document.head.appendChild(style);
 		}
