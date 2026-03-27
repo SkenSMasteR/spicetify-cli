@@ -9,6 +9,9 @@ $ErrorActionPreference = 'Stop'
 $spicetifyFolderPath = "$env:LOCALAPPDATA\spicetify"
 $spicetifyOldFolderPath = "$HOME\spicetify-cli"
 $script:ui = $null
+$script:lastStatusText = ''
+$script:lastStatusPercent = 0
+$script:lastStatusColor = 'Gray'
 $script:installErrorCodes = @{
   Unknown = 'E1000'
   ConsoleTooSmall = 'E1001'
@@ -142,8 +145,65 @@ function Set-Status {
     Write-Host $text -ForegroundColor $color
     return
   }
+  $script:lastStatusText = $text
+  $script:lastStatusPercent = $percent
+  $script:lastStatusColor = $color
   Write-LeftCentered -text $text -row $script:ui.statusRow -color $color
   Update-Progress -percent $percent
+}
+
+function Show-TuiPopupYesNo {
+  param (
+    [string]$Message,
+    [int]$DefaultChoice = 0
+  )
+
+  $popupWidth = [Math]::Max(28, [Math]::Min($script:ui.leftWidth - 4, 54))
+  $popupHeight = 7
+  $x = [Math]::Max(1, [Math]::Floor(($script:ui.leftWidth - $popupWidth) / 2))
+  $y = [Math]::Max(2, [Math]::Floor(($script:ui.height - $popupHeight) / 2))
+
+  $messageMax = [Math]::Max(8, $popupWidth - 4)
+  if ($Message.Length -gt $messageMax) {
+    $Message = $Message.Substring(0, $messageMax - 3) + '...'
+  }
+  $hint = if ($DefaultChoice -eq 0) { 'Y/N (Enter=Yes)' } else { 'Y/N (Enter=No)' }
+
+  for ($row = 0; $row -lt $popupHeight; $row++) {
+    if ($row -eq 0 -or $row -eq ($popupHeight - 1)) {
+      Write-At -x $x -y ($y + $row) -text ('+' + ('-' * ($popupWidth - 2)) + '+') -color 'Cyan'
+    }
+    else {
+      Write-At -x $x -y ($y + $row) -text ('|' + (' ' * ($popupWidth - 2)) + '|') -color 'Cyan'
+    }
+  }
+
+  Write-At -x ($x + 2) -y ($y + 2) -text $Message -color 'White'
+  Write-At -x ($x + 2) -y ($y + 4) -text $hint -color 'Yellow'
+
+  while ($true) {
+    $key = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    if ($key.VirtualKeyCode -eq 13) { break }
+    $char = $key.Character.ToString().ToLower()
+    if ($char -eq 'y') {
+      $DefaultChoice = 0
+      break
+    }
+    if ($char -eq 'n') {
+      $DefaultChoice = 1
+      break
+    }
+  }
+
+  for ($row = 0; $row -lt $popupHeight; $row++) {
+    Clear-RectLine -x $x -y ($y + $row) -width $popupWidth
+  }
+
+  if ($script:lastStatusText) {
+    Set-Status -text $script:lastStatusText -percent $script:lastStatusPercent -color $script:lastStatusColor
+  }
+
+  return $DefaultChoice
 }
 
 function Move-CursorToBottom {
@@ -216,6 +276,15 @@ function Prompt-YesNo {
     [string]$NoHelp,
     [int]$DefaultChoice = 0
   )
+
+  if ($script:ui) {
+    try {
+      return (Show-TuiPopupYesNo -Message $Message -DefaultChoice $DefaultChoice)
+    }
+    catch {
+      # Fall through to non-TUI prompting when popup rendering isn't supported.
+    }
+  }
 
   if ($Host.UI -and $Host.UI.RawUI) {
     try {
@@ -401,7 +470,12 @@ function Install-Spicetify {
 }
 
 function Install-Marketplace {
-  Write-Host 'Starting Marketplace installation...'
+  if ($script:ui) {
+    Write-Log -message 'Starting Marketplace installation...' -color 'Cyan'
+  }
+  else {
+    Write-Host 'Starting Marketplace installation...'
+  }
   $marketplaceInstallerCommit = 'e6b09f31e84e039ac4753216cd5aedc748ccd88f'
   $marketplaceInstallerSha256 = '0962C57F8E36936228429B3A3C5CADABFCC9BBD9C3688C884180AF917DC33F02'
   $marketplaceInstallerUrl = "https://raw.githubusercontent.com/spicetify/spicetify-marketplace/$marketplaceInstallerCommit/resources/install.ps1"
@@ -418,9 +492,16 @@ function Install-Marketplace {
     Invoke-WebRequest @downloadParams
     $actualSha256 = (Get-FileHash -Path $tempScript -Algorithm SHA256).Hash
     if ($actualSha256 -ne $marketplaceInstallerSha256) {
-      Write-Host "Warning: Marketplace installer checksum mismatch." -ForegroundColor Yellow
-      Write-Host "Expected: $marketplaceInstallerSha256" -ForegroundColor Yellow
-      Write-Host "Actual:   $actualSha256" -ForegroundColor Yellow
+      if ($script:ui) {
+        Write-Log -message 'Warning: Marketplace installer checksum mismatch.' -color 'Yellow'
+        Write-Log -message "Expected: $marketplaceInstallerSha256" -color 'Yellow'
+        Write-Log -message "Actual:   $actualSha256" -color 'Yellow'
+      }
+      else {
+        Write-Host "Warning: Marketplace installer checksum mismatch." -ForegroundColor Yellow
+        Write-Host "Expected: $marketplaceInstallerSha256" -ForegroundColor Yellow
+        Write-Host "Actual:   $actualSha256" -ForegroundColor Yellow
+      }
       $continueOnMismatch = Prompt-YesNo `
         -Message 'Checksum verification failed. Install Marketplace anyway?' `
         -YesHelp 'Continue installation despite checksum mismatch.' `
@@ -429,8 +510,14 @@ function Install-Marketplace {
       if ($continueOnMismatch -ne 0) {
         throw "Marketplace installer checksum mismatch. Expected $marketplaceInstallerSha256, got $actualSha256."
       }
-      Write-Host 'Continuing despite checksum mismatch by user choice.' -ForegroundColor Yellow
+      if ($script:ui) {
+        Write-Log -message 'Continuing despite checksum mismatch by user choice.' -color 'Yellow'
+      }
+      else {
+        Write-Host 'Continuing despite checksum mismatch by user choice.' -ForegroundColor Yellow
+      }
     }
+    if ($script:ui) { Enter-StandardOutput }
     $powershellExe = Join-Path $PSHOME 'powershell.exe'
     if (-not (Test-Path -Path $powershellExe)) {
       $powershellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -460,7 +547,12 @@ function Install-Marketplace {
     Remove-Item -Path $tempScript -Force -ErrorAction SilentlyContinue
   }
 
-  Write-Host 'Marketplace installation completed.'
+  if ($script:ui) {
+    Write-Log -message 'Marketplace installation completed.' -color 'Green'
+  }
+  else {
+    Write-Host 'Marketplace installation completed.'
+  }
 }
 
 function Fail-AndExit {
@@ -502,7 +594,6 @@ try {
 
   if (-not (Test-Admin)) {
     Write-Log -message 'Warning: running as Administrator may cause issues.' -color 'Yellow'
-    Move-CursorToBottom
     $choice = Prompt-YesNo `
       -Message 'Do you want to abort the installation process?' `
       -YesHelp 'Abort installation.' `
@@ -519,14 +610,12 @@ try {
 
   Install-Spicetify
 
-  Move-CursorToBottom
   $choice = Prompt-YesNo `
     -Message 'Do you also want to install Spicetify Marketplace?' `
     -YesHelp 'Install Spicetify Marketplace.' `
     -NoHelp 'Do not install Spicetify Marketplace.' `
     -DefaultChoice 0
   if ($choice -eq 0) {
-    Enter-StandardOutput
     try {
       Install-Marketplace
     }
