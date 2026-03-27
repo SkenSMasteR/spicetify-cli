@@ -344,7 +344,16 @@ function Install-Marketplace {
       }
     }
     else {
-      & $tempScript
+      $powershellFromPath = Get-Command powershell.exe -ErrorAction SilentlyContinue
+      if ($powershellFromPath) {
+        & $powershellFromPath.Source -NoProfile -ExecutionPolicy Bypass -File $tempScript
+        if ($LASTEXITCODE -ne 0) {
+          throw "Marketplace installer exited with code $LASTEXITCODE"
+        }
+      }
+      else {
+        & $tempScript
+      }
     }
   }
   finally {
