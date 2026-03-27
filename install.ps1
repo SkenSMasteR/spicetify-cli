@@ -9,6 +9,17 @@ $ErrorActionPreference = 'Stop'
 $spicetifyFolderPath = "$env:LOCALAPPDATA\spicetify"
 $spicetifyOldFolderPath = "$HOME\spicetify-cli"
 $script:ui = $null
+$script:installErrorCodes = @{
+  Unknown = 'E1000'
+  ConsoleTooSmall = 'E1001'
+  PowerShellTooOld = 'E1002'
+  InvalidVersion = 'E1003'
+  UserAborted = 'E1004'
+  DownloadFailed = 'E2001'
+  MarketplaceChecksum = 'E3001'
+  MarketplaceExecution = 'E3002'
+  MarketplacePowerShellMissing = 'E3003'
+}
 #endregion Variables
 
 #region UI Functions
@@ -145,6 +156,37 @@ function Enter-StandardOutput {
   Move-CursorToBottom
   Write-Host ''
   $script:ui = $null
+}
+
+function Resolve-InstallError {
+  param ([string]$Message)
+
+  if ($Message -like 'Console too small for TUI*') {
+    return @{ Code = $script:installErrorCodes.ConsoleTooSmall; Reason = 'Unsupported console size for TUI.'; Message = $Message }
+  }
+  if ($Message -like 'PowerShell 5.1+ required*') {
+    return @{ Code = $script:installErrorCodes.PowerShellTooOld; Reason = 'PowerShell version is too old.'; Message = $Message }
+  }
+  if ($Message -like 'Invalid spicetify version*') {
+    return @{ Code = $script:installErrorCodes.InvalidVersion; Reason = 'Invalid version format provided.'; Message = $Message }
+  }
+  if ($Message -eq 'spicetify installation aborted by user.') {
+    return @{ Code = $script:installErrorCodes.UserAborted; Reason = 'Installation was canceled by user.'; Message = $Message }
+  }
+  if ($Message -like 'Marketplace installer checksum mismatch*') {
+    return @{ Code = $script:installErrorCodes.MarketplaceChecksum; Reason = 'Marketplace installer integrity check failed.'; Message = $Message }
+  }
+  if ($Message -like 'Marketplace installer exited with code*') {
+    return @{ Code = $script:installErrorCodes.MarketplaceExecution; Reason = 'Marketplace installer process failed.'; Message = $Message }
+  }
+  if ($Message -like 'Unable to locate powershell.exe*') {
+    return @{ Code = $script:installErrorCodes.MarketplacePowerShellMissing; Reason = 'PowerShell executable was not found for Marketplace install.'; Message = $Message }
+  }
+  if ($Message -like '*download*' -or $Message -like '*The remote name could not be resolved*' -or $Message -like '*Unable to connect to the remote server*') {
+    return @{ Code = $script:installErrorCodes.DownloadFailed; Reason = 'Network/download failure.'; Message = $Message }
+  }
+
+  return @{ Code = $script:installErrorCodes.Unknown; Reason = 'Unhandled installer error.'; Message = $Message }
 }
 #endregion UI Functions
 
@@ -376,7 +418,18 @@ function Install-Marketplace {
     Invoke-WebRequest @downloadParams
     $actualSha256 = (Get-FileHash -Path $tempScript -Algorithm SHA256).Hash
     if ($actualSha256 -ne $marketplaceInstallerSha256) {
-      throw "Marketplace installer checksum mismatch. Expected $marketplaceInstallerSha256, got $actualSha256."
+      Write-Host "Warning: Marketplace installer checksum mismatch." -ForegroundColor Yellow
+      Write-Host "Expected: $marketplaceInstallerSha256" -ForegroundColor Yellow
+      Write-Host "Actual:   $actualSha256" -ForegroundColor Yellow
+      $continueOnMismatch = Prompt-YesNo `
+        -Message 'Checksum verification failed. Install Marketplace anyway?' `
+        -YesHelp 'Continue installation despite checksum mismatch.' `
+        -NoHelp 'Abort installation due to integrity check failure.' `
+        -DefaultChoice 1
+      if ($continueOnMismatch -ne 0) {
+        throw "Marketplace installer checksum mismatch. Expected $marketplaceInstallerSha256, got $actualSha256."
+      }
+      Write-Host 'Continuing despite checksum mismatch by user choice.' -ForegroundColor Yellow
     }
     $powershellExe = Join-Path $PSHOME 'powershell.exe'
     if (-not (Test-Path -Path $powershellExe)) {
@@ -411,14 +464,19 @@ function Install-Marketplace {
 }
 
 function Fail-AndExit {
-  param ([string]$Message)
+  param (
+    [string]$Message,
+    [string]$Code = 'E1000',
+    [string]$Reason = 'Unhandled installer error.'
+  )
+  $failureText = "FAILED [$Code] $Reason"
   if ($script:ui) {
-    Set-Status -text 'FAILED' -percent 100 -color 'Red'
+    Set-Status -text $failureText -percent 100 -color 'Red'
     Write-Log -message $Message -color 'Red'
     Move-CursorToBottom
   }
   else {
-    Write-Host "FAILED: $Message" -ForegroundColor Red
+    Write-Host "$failureText $Message" -ForegroundColor Red
   }
   Pause
   exit 1
@@ -469,7 +527,28 @@ try {
     -DefaultChoice 0
   if ($choice -eq 0) {
     Enter-StandardOutput
-    Install-Marketplace
+    try {
+      Install-Marketplace
+    }
+    catch {
+      $marketplaceError = Resolve-InstallError -Message $_.Exception.Message
+      if ($marketplaceError.Code -in @($script:installErrorCodes.MarketplaceChecksum, $script:installErrorCodes.MarketplaceExecution)) {
+        $continueChoice = Prompt-YesNo `
+          -Message "Marketplace failed [$($marketplaceError.Code)] $($marketplaceError.Reason) Install anyway without Marketplace?" `
+          -YesHelp 'Continue installation without Marketplace.' `
+          -NoHelp 'Stop installation and keep this failure.' `
+          -DefaultChoice 1
+        if ($continueChoice -eq 0) {
+          Write-Host "Continuing without Marketplace ($($marketplaceError.Code))." -ForegroundColor Yellow
+        }
+        else {
+          throw
+        }
+      }
+      else {
+        throw
+      }
+    }
   }
   else {
     Write-Log -message 'Marketplace installation skipped.' -color 'Yellow'
@@ -477,6 +556,7 @@ try {
   }
 }
 catch {
-  Fail-AndExit -Message $_.Exception.Message
+  $resolvedError = Resolve-InstallError -Message $_.Exception.Message
+  Fail-AndExit -Message $resolvedError.Message -Code $resolvedError.Code -Reason $resolvedError.Reason
 }
 #endregion Main
