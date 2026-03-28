@@ -104,12 +104,13 @@ func Start(version string, spotifyBasePath string, extractedAppsPath string, fla
 		readLocalCssMap(&cssTranslationMap)
 	}
 
-	cssMapPairs := make([]string, 0, len(cssTranslationMap)*2)
+	cssMapPairs := make([]string, 0, len(cssTranslationMap)*4)
 	for k, v := range cssTranslationMap {
+		cssMapPairs = append(cssMapPairs, k+":", `"`+v+`":`)
 		cssMapPairs = append(cssMapPairs, k, v)
 	}
 	cssMapJSReplacer := strings.NewReplacer(cssMapPairs...)
-	cssMapJSStringRe := regexp.MustCompile(`"[^"]*"|'[^']*'|` + "`[^`]*`" + `|\b[a-zA-Z0-9_]{16,21}\s*:`)
+	cssMapBareKeySpaceRe := regexp.MustCompile(`\b[a-zA-Z0-9_]{16,21}[ \t]+:`)
 
 	verParts := strings.Split(flags.SpotifyVer, ".")
 	spotifyMajor, spotifyMinor, spotifyPatch := 0, 0, 0
@@ -266,19 +267,19 @@ func Start(version string, spotifyBasePath string, extractedAppsPath string, fla
 					})
 				}
 
-				content = cssMapJSStringRe.ReplaceAllStringFunc(content, func(match string) string {
-					first := match[0]
-					if first == '"' || first == '\'' || first == '`' {
-						inner := match[1 : len(match)-1]
-						return string(first) + cssMapJSReplacer.Replace(inner) + string(first)
-					}
+				// Bare keys with whitespace before the colon
+				// the replacer's k+":" entry can't match these, so handle them first
+				content = cssMapBareKeySpaceRe.ReplaceAllStringFunc(content, func(match string) string {
 					colonIdx := strings.LastIndex(match, ":")
-					key := strings.TrimSpace(match[:colonIdx])
-					if replaced, ok := cssTranslationMap[key]; ok {
-						return `"` + replaced + `"` + match[colonIdx:]
+					key := strings.TrimRight(match[:colonIdx], " \t")
+					if v, ok := cssTranslationMap[key]; ok {
+						return `"` + v + `":`
 					}
 					return match
 				})
+				// Single pass: k+":" → "v": for bare keys,
+				// k -> v for all other occurrences
+				content = cssMapJSReplacer.Replace(content)
 				content = colorVariableReplaceForJS(content)
 
 				return content
